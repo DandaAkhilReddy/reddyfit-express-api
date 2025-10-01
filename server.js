@@ -403,6 +403,117 @@ app.post('/api/onboarding', async (req, res) => {
 });
 
 // ============================================
+// Admin Routes
+// ============================================
+
+// DELETE /api/admin/users/:id - Delete a user (Admin only)
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`📥 DELETE /api/admin/users/${id}`);
+
+    const dbPool = await getDbPool();
+
+    // First delete onboarding responses (foreign key constraint)
+    await dbPool.request()
+      .input('user_id', sql.UniqueIdentifier, id)
+      .query('DELETE FROM onboarding_responses WHERE user_id = @user_id');
+
+    // Then delete user profile
+    const result = await dbPool.request()
+      .input('id', sql.UniqueIdentifier, id)
+      .query('DELETE FROM user_profiles WHERE id = @id');
+
+    if (result.rowsAffected[0] === 0) {
+      console.log('⚠️ User not found');
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('✅ User deleted successfully');
+    res.json({ message: 'User deleted successfully', success: true });
+  } catch (err) {
+    console.error('❌ Error deleting user:', err);
+    res.status(500).json({ error: 'Failed to delete user', details: err.message });
+  }
+});
+
+// GET /api/admin/stats - Get admin statistics
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    console.log('📥 GET /api/admin/stats');
+    const dbPool = await getDbPool();
+
+    // Get various statistics
+    const stats = await dbPool.request().query(`
+      SELECT
+        COUNT(*) as total_users,
+        SUM(CASE WHEN onboarding_completed = 1 THEN 1 ELSE 0 END) as completed_onboarding,
+        SUM(CASE WHEN created_at >= DATEADD(day, -7, GETUTCDATE()) THEN 1 ELSE 0 END) as new_this_week,
+        SUM(CASE WHEN created_at >= DATEADD(day, -30, GETUTCDATE()) THEN 1 ELSE 0 END) as new_this_month
+      FROM user_profiles
+    `);
+
+    // Get fitness goals distribution
+    const goalsDistribution = await dbPool.request().query(`
+      SELECT fitness_goal, COUNT(*) as count
+      FROM onboarding_responses
+      WHERE fitness_goal IS NOT NULL
+      GROUP BY fitness_goal
+      ORDER BY count DESC
+    `);
+
+    // Get diet preferences distribution
+    const dietDistribution = await dbPool.request().query(`
+      SELECT diet_preference, COUNT(*) as count
+      FROM onboarding_responses
+      WHERE diet_preference IS NOT NULL
+      GROUP BY diet_preference
+      ORDER BY count DESC
+    `);
+
+    // Get fitness levels distribution
+    const levelsDistribution = await dbPool.request().query(`
+      SELECT current_fitness_level, COUNT(*) as count
+      FROM onboarding_responses
+      WHERE current_fitness_level IS NOT NULL
+      GROUP BY current_fitness_level
+      ORDER BY count DESC
+    `);
+
+    // Get payment willingness
+    const paymentWillingness = await dbPool.request().query(`
+      SELECT willing_to_pay, COUNT(*) as count
+      FROM onboarding_responses
+      WHERE willing_to_pay IS NOT NULL
+      GROUP BY willing_to_pay
+      ORDER BY count DESC
+    `);
+
+    // Get how users found us
+    const sources = await dbPool.request().query(`
+      SELECT how_found_us, COUNT(*) as count
+      FROM onboarding_responses
+      WHERE how_found_us IS NOT NULL
+      GROUP BY how_found_us
+      ORDER BY count DESC
+    `);
+
+    console.log('✅ Stats retrieved successfully');
+    res.json({
+      overview: stats.recordset[0],
+      fitnessGoals: goalsDistribution.recordset,
+      dietPreferences: dietDistribution.recordset,
+      fitnessLevels: levelsDistribution.recordset,
+      paymentWillingness: paymentWillingness.recordset,
+      sources: sources.recordset
+    });
+  } catch (err) {
+    console.error('❌ Error fetching stats:', err);
+    res.status(500).json({ error: 'Failed to fetch statistics', details: err.message });
+  }
+});
+
+// ============================================
 // Error Handling Middleware
 // ============================================
 app.use((err, req, res, next) => {
